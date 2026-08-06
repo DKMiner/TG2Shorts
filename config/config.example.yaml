@@ -1,0 +1,56 @@
+active_template: meme
+
+templates:
+  meme:
+    telegram:
+      input_chat: -1001234567890
+      review_chat: -1009876543210
+
+    video:
+      width: 1080
+      height: 1920
+      fps: 30
+
+    render:
+      intro: true
+      transition: true
+      outro: true
+      blur_background: true
+      intro_part:
+        enabled: true
+        start: 6.26
+        end: 7.25
+        font_size: 96
+        y_offset: -40
+
+    assets:
+      intro: assets/meme/intro.mp4
+      transition: assets/meme/transition.mp4
+      outro: assets/meme/outro.mp4
+
+  ranking:
+    telegram:
+      input_chat:
+      review_chat:
+
+    video:
+      width: 1080
+      height: 1920
+      fps: 30
+
+    render:
+      intro: false
+      transition: false
+      outro: false
+      blur_background: false
+      intro_part:
+        enabled: false
+        start: 6.26
+        end: 7.25
+        font_size: 96
+        y_offset: -40
+
+    assets:
+      intro:
+      transition:
+      outro:

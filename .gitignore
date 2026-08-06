@@ -1,0 +1,74 @@
+# -------------------------
+# Python
+# -------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# -------------------------
+# VSCode / IDE
+# -------------------------
+.vscode/
+.idea/
+
+# -------------------------
+# Secrets
+# -------------------------
+.env
+config/config.yaml
+
+# Optional examples
+config/*.example.yaml
+!config/config.example.yaml
+# -------------------------
+# Sessions
+# -------------------------
+*.session
+*.session-journal
+
+# -------------------------
+# Runtime data
+# -------------------------
+data/
+logs/
+temp/
+
+# -------------------------
+# Render output
+# -------------------------
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+
+# except template assets
+!assets/**/*.mp4
+!assets/**/*.mov
+!assets/**/*.mkv
+
+# -------------------------
+# ffmpeg temporary files
+# -------------------------
+*.txt
+concat.txt
+
+# -------------------------
+# Operating system
+# -------------------------
+.DS_Store
+Thumbs.db
+
+# -------------------------
+# Misc
+# -------------------------
+*.log
