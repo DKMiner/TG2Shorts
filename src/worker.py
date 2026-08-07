@@ -52,8 +52,8 @@ def _cleanup_intermediate_files(template_name: str, job_id: str) -> None:
     shutil.rmtree(folder / "rendered" / "segments", ignore_errors=True)
 
 
-async def _upload_review_copy(bot, review_chat_id: int, final_path: Path, job_id: str, part_text: str) -> tuple[int, str]:
-    caption = f"Job {job_id} | Part {part_text}"
+async def _upload_review_copy(bot, review_chat_id: int, final_path: Path, job_id: str, make_text: str) -> tuple[int, str]:
+    caption = f"Job {job_id} | Part {make_text}"
 
     try:
         with final_path.open("rb") as fh:
@@ -107,6 +107,14 @@ async def process_job(cfg, job_id: str, bot=None, notify_chat_id: int | None = N
                 if not has_media(msg):
                     raise RuntimeError(f"Message {message_id} in chat {chat_id} no longer has media")
 
+                # Keep the caption in the job even if the queue entry predates
+                # caption support. Telethon exposes the Telegram caption as msg.message.
+                if not item.get("caption"):
+                    caption = getattr(msg, "message", None)
+                    if caption:
+                        item["caption"] = caption
+                        save_job(template_name, job)
+
                 ext = guess_media_ext(msg)
                 target_path = downloads_dir / f"{index:03d}{ext}"
 
@@ -141,7 +149,7 @@ async def process_job(cfg, job_id: str, bot=None, notify_chat_id: int | None = N
         save_job(template_name, job)
 
         review_chat_id = cfg.template.telegram.review_chat
-        part_text = str(job.get("part_text") or "1")
+        make_text = str(job.get("make_text") or "1")
 
         if bot and review_chat_id is not None:
             job["status"] = "uploading_review"
@@ -153,7 +161,7 @@ async def process_job(cfg, job_id: str, bot=None, notify_chat_id: int | None = N
                     int(review_chat_id),
                     final_path,
                     job_id,
-                    part_text,
+                    make_text,
                 )
                 job["status"] = "awaiting_review"
                 job["review_chat_id"] = int(review_chat_id)
