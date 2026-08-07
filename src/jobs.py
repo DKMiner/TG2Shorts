@@ -98,7 +98,7 @@ def create_job(
     job_id: str,
     created_by: int | None,
     queue_snapshot: list[dict],
-    part_text: str,
+    make_text: str,
 ) -> dict:
     folder = job_folder(template_name, job_id)
     (folder / "downloads").mkdir(parents=True, exist_ok=True)
@@ -113,7 +113,7 @@ def create_job(
         "started_at": None,
         "finished_at": None,
         "error": None,
-        "part_text": part_text,
+        "make_text": make_text,
         "rendered_path": None,
         "items": queue_snapshot,
     }
