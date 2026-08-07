@@ -44,7 +44,7 @@ def _escape_drawtext(text: str) -> str:
     )
 
 
-def _build_filter(cfg, *, intro_segment: bool, part_text: str | None) -> str:
+def _build_filter(cfg, *, intro_segment: bool, make_text: str | None) -> str:
     width = cfg.template.video.width
     height = cfg.template.video.height
     fps = cfg.template.video.fps
@@ -65,8 +65,8 @@ def _build_filter(cfg, *, intro_segment: bool, part_text: str | None) -> str:
             f"format=yuv420p,setsar=1,fps={fps}[vbase]"
         )
 
-    if intro_segment and part_text and cfg.template.render.intro_part.enabled:
-        txt = _escape_drawtext(part_text)
+    if intro_segment and make_text and cfg.template.render.intro_part.enabled:
+        txt = _escape_drawtext(make_text)
         start = cfg.template.render.intro_part.start
         end = cfg.template.render.intro_part.end
         font_size = cfg.template.render.intro_part.font_size
@@ -89,13 +89,13 @@ def _normalize_clip(
     *,
     cfg,
     intro_segment: bool = False,
-    part_text: str | None = None,
+    make_text: str | None = None,
 ) -> None:
     if not source.exists():
         raise RuntimeError(f"Source clip missing: {source}")
 
     source_has_audio = _has_audio(source)
-    filter_complex = _build_filter(cfg, intro_segment=intro_segment, part_text=part_text)
+    filter_complex = _build_filter(cfg, intro_segment=intro_segment, make_text=make_text)
 
     cmd = ["ffmpeg", "-y", "-i", str(source)]
 
@@ -154,7 +154,7 @@ def render_job(cfg, job_id: str) -> Path:
     save_job(template_name, job)
 
     items = job.get("items", [])
-    part_text = str(job.get("part_text") or "1")
+    make_text = str(job.get("make_text") or "1")
 
     sequence: list[tuple[Path, str, bool]] = []
 
@@ -191,7 +191,7 @@ def render_job(cfg, job_id: str) -> Path:
             segment_path,
             cfg=cfg,
             intro_segment=intro_segment,
-            part_text=part_text if intro_segment else None,
+            make_text=make_text if intro_segment else None,
         )
         segment_paths.append(segment_path)
 

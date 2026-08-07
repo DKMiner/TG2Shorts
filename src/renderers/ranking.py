@@ -2,13 +2,42 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import random
 import shutil
 import subprocess
+import textwrap
 
 from jobs import BASE_DIR, job_folder, load_job, now_iso, save_job
 
 
 RANKING_ASSET_DIR = BASE_DIR / "assets" / "ranking"
+
+TITLE_FONT_SIZE = 90
+TITLE_MIN_FONT_SIZE = 34
+TITLE_TOP_Y = 40
+TITLE_LINE_SPACING = 5
+
+NUMBER_FONT_SIZE = 74
+NUMBER_LEFT_X = 60
+NUMBER_START_Y = 300
+NUMBER_GAP = 120
+
+CAPTION_FONT_SIZE = 74
+CAPTION_LEFT_X = 150
+CAPTION_OFFSET_Y = 5
+
+NUMBER_BORDER = 5
+TITLE_BORDER = 5
+
+NUMBER_COLORS = [
+    "white",
+    "yellow",
+    "cyan",
+    "magenta",
+    "lime",
+    "orange",
+    "red",
+]
 
 
 def _run(cmd: list[str]) -> None:
@@ -40,6 +69,19 @@ def _get_duration(path: Path) -> float:
     return float(probe["format"]["duration"])
 
 
+def _escape_drawtext(text: str) -> str:
+    return (
+        text.replace("\\", "\\\\")
+        .replace(":", "\\:")
+        .replace("'", "\\'")
+        .replace("%", "\\%")
+        .replace(",", "\\,")
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+        .replace("\n", "\\n")
+    )
+
+
 def _escape_path(path: Path) -> str:
     return str(path).replace("\\", "\\\\").replace(":", "\\:")
 
@@ -57,16 +99,12 @@ def _find_font_file() -> Path:
     return fonts[0]
 
 
-def _wrap_title_to_two_lines(title: str) -> str:
-    """
-    Try to fit the title into two lines by choosing the most balanced split.
-    Falls back to the original text if there is only one word.
-    """
+def _wrap_title_to_two_lines(title: str) -> tuple[str, str]:
     words = [w for w in title.split() if w]
     if not words:
-        return "Ranking funny viral videos"
+        return "Ranking", "funny viral videos"
     if len(words) == 1:
-        return words[0]
+        return words[0], ""
 
     best: tuple[int, str, str] | None = None
 
@@ -79,14 +117,16 @@ def _wrap_title_to_two_lines(title: str) -> str:
             best = candidate
 
     assert best is not None
-    return f"{best[1]}\n{best[2]}"
+    return best[1], best[2]
 
 
-def _pick_title_font_size(width: int, title: str) -> int:
-    longest = max((len(line) for line in title.splitlines()), default=10)
-    # Smaller when the title is longer; still readable on 1080p.
-    size = int(width / max(12, longest * 0.78))
-    return max(34, min(68, size))
+def _pick_title_font_size(title1: str, title2: str, width: int) -> int:
+    longest_line = max(len(title1), len(title2), 1)
+    if longest_line <= 14:
+        return TITLE_FONT_SIZE
+
+    shrink = (longest_line - 14) * 2
+    return max(TITLE_MIN_FONT_SIZE, TITLE_FONT_SIZE - shrink)
 
 
 def _pick_number_font_size(width: int) -> int:
@@ -166,64 +206,113 @@ def _normalize_segment(source: Path, dest: Path, *, cfg) -> None:
 def _build_overlay_filter(
     cfg,
     *,
-    titlefile: Path,
+    title1_file: Path,
+    title2_file: Path | None,
     title_start: float,
     title_end: float,
     clip_starts: list[float],
+    assigned_numbers: list[int],
+    caption_files: list[Path | None],
 ) -> str:
     font_path = _find_font_file()
     fontfile = _escape_path(font_path)
-    titlefile_escaped = _escape_path(titlefile)
+    title1_escaped = _escape_path(title1_file)
+    title2_escaped = _escape_path(title2_file) if title2_file else ""
 
     width = cfg.template.video.width
     height = cfg.template.video.height
 
-    title_size = _pick_title_font_size(width, titlefile.read_text(encoding="utf-8"))
+    title1_text = title1_file.read_text(encoding="utf-8")
+    title2_text = title2_file.read_text(encoding="utf-8") if title2_file else ""
+    title_size = _pick_title_font_size(title1_text, title2_text, width)
     number_size = _pick_number_font_size(width)
 
-    # Lower than before, so the title has breathing room above the numbers.
-    title_y = max(30, height // 28)
-    left_x = max(50, width // 25)
-    number_start_y = max(250, height // 6)
-    number_gap = max(64, height // 10)
+    title1_y = TITLE_TOP_Y
+    title2_y = TITLE_TOP_Y + title_size + TITLE_LINE_SPACING
 
-    number_palette = [
-        "white",
-        "yellow",
-        "cyan",
-        "magenta",
-        "lime",
-        "orange",
-        "red",
-    ]
+    left_x = NUMBER_LEFT_X
+    number_start_y = NUMBER_START_Y
+    number_gap = NUMBER_GAP
+
+    number_palette = NUMBER_COLORS
 
     parts: list[str] = []
 
     parts.append(
-        f"[0:v]drawtext=fontfile='{fontfile}':textfile='{titlefile_escaped}':reload=0:"
+        f"[0:v]drawtext=fontfile='{fontfile}':textfile='{title1_escaped}':reload=0:"
         f"fontcolor=white:fontsize={title_size}:"
-        f"box=1:boxcolor=black@0.45:boxborderw=18:line_spacing=8:"
-        f"x=(w-text_w)/2:y={title_y}:"
+        f"borderw={TITLE_BORDER}:bordercolor=black:"
+        f"x=(w-text_w)/2:y={title1_y}:"
         f"enable='between(t,{title_start:.3f},{title_end:.3f})'[v0]"
     )
 
     current = "v0"
-    for i, start_time in enumerate(clip_starts, start=1):
+
+    if title2_file and title2_text.strip():
+        parts.append(
+            f"[{current}]drawtext=fontfile='{fontfile}':textfile='{title2_escaped}':reload=0:"
+            f"fontcolor=white:fontsize={title_size}:"
+            f"borderw={TITLE_BORDER}:bordercolor=black:"
+            f"x=(w-text_w)/2:y={title2_y}:"
+            f"enable='between(t,{title_start:.3f},{title_end:.3f})'[v1]"
+        )
+        current = "v1"
+
+    for i in range(1, len(assigned_numbers) + 1):
         color = number_palette[(i - 1) % len(number_palette)]
-        next_label = f"v{i}"
+        next_label = f"v_num_{i}"
         y = number_start_y + (i - 1) * number_gap
 
         parts.append(
             f"[{current}]drawtext=fontfile='{fontfile}':text='{i}.':"
             f"fontcolor={color}:fontsize={number_size}:"
-            f"borderw=5:bordercolor=black:"
+            f"borderw={NUMBER_BORDER}:bordercolor=black:"
             f"x={left_x}:y={y}:"
+            f"enable='between(t,{title_start:.3f},{title_end:.3f})'[{next_label}]"
+        )
+        current = next_label
+
+    for idx, (start_time, number, caption_file) in enumerate(
+        zip(clip_starts, assigned_numbers, caption_files),
+        start=1,
+    ):
+        if caption_file is None:
+            continue
+
+        color = number_palette[(number - 1) % len(number_palette)]
+        next_label = f"v_cap_{idx}"
+        y = number_start_y + (number - 1) * number_gap + CAPTION_OFFSET_Y
+        caption_escaped = _escape_path(caption_file)
+
+        parts.append(
+            f"[{current}]drawtext=fontfile='{fontfile}':textfile='{caption_escaped}':reload=0:"
+            f"fontcolor={color}:fontsize={CAPTION_FONT_SIZE}:"
+            f"borderw={NUMBER_BORDER}:bordercolor=black:"
+            f"x={CAPTION_LEFT_X}:y={y}:"
             f"enable='between(t,{start_time:.3f},{title_end:.3f})'[{next_label}]"
         )
         current = next_label
 
     parts.append(f"[{current}]null[v]")
     return ";".join(parts)
+
+
+def _make_assigned_numbers(count: int, seed_text: str) -> list[int]:
+    if count <= 1:
+        return [1]
+
+    rng = random.Random(seed_text)
+    nums = list(range(2, count + 1))
+    rng.shuffle(nums)
+    nums.append(1)
+    return nums
+
+
+def _short_caption(text: str, limit: int = 28) -> str:
+    text = " ".join((text or "").split())
+    if not text:
+        return ""
+    return textwrap.shorten(text, width=limit, placeholder="…")
 
 
 def render_job(cfg, job_id: str) -> Path:
@@ -241,7 +330,7 @@ def render_job(cfg, job_id: str) -> Path:
     job["render_started_at"] = now_iso()
     save_job(template_name, job)
 
-    mark_text = str(job.get("mark_text") or job.get("part_text") or "Ranking funny viral videos")
+    make_text = str(job.get("make_text") or "Ranking funny viral videos")
     items = job.get("items", [])
     if not items:
         raise RuntimeError("Ranking job has no items")
@@ -296,6 +385,18 @@ def render_job(cfg, job_id: str) -> Path:
 
     title_end = outro_start if outro_start is not None else cursor
 
+    assigned_numbers = _make_assigned_numbers(len(clip_starts), seed_text=job_id)
+
+    caption_files: list[Path | None] = []
+    for idx, item in enumerate(items, start=1):
+        caption = str(item.get("caption") or "").strip()
+        if caption:
+            caption_file = rendered_dir / f"caption_{idx:03d}.txt"
+            caption_file.write_text(_short_caption(caption), encoding="utf-8")
+            caption_files.append(caption_file)
+        else:
+            caption_files.append(None)
+
     merged_base = rendered_dir / "merged_base.mp4"
     concat_list = rendered_dir / "concat.txt"
     with concat_list.open("w", encoding="utf-8") as f:
@@ -318,15 +419,24 @@ def render_job(cfg, job_id: str) -> Path:
         ]
     )
 
-    titlefile = rendered_dir / "ranking_title.txt"
-    titlefile.write_text(_wrap_title_to_two_lines(mark_text), encoding="utf-8")
+    title1, title2 = _wrap_title_to_two_lines(make_text)
+    title1_file = rendered_dir / "ranking_title_1.txt"
+    title1_file.write_text(title1, encoding="utf-8")
+
+    title2_file: Path | None = None
+    if title2.strip():
+        title2_file = rendered_dir / "ranking_title_2.txt"
+        title2_file.write_text(title2, encoding="utf-8")
 
     overlay_filter = _build_overlay_filter(
         cfg,
-        titlefile=titlefile,
+        title1_file=title1_file,
+        title2_file=title2_file,
         title_start=clip_starts[0],
         title_end=title_end,
         clip_starts=clip_starts,
+        assigned_numbers=assigned_numbers,
+        caption_files=caption_files,
     )
 
     final_path = rendered_dir / "final.mp4"
@@ -357,8 +467,15 @@ def render_job(cfg, job_id: str) -> Path:
     )
 
     concat_list.unlink(missing_ok=True)
-    titlefile.unlink(missing_ok=True)
+    title1_file.unlink(missing_ok=True)
+    if title2_file is not None:
+        title2_file.unlink(missing_ok=True)
     merged_base.unlink(missing_ok=True)
+
+    for cap in caption_files:
+        if cap is not None:
+            cap.unlink(missing_ok=True)
+
     shutil.rmtree(segments_dir, ignore_errors=True)
 
     job = load_job(template_name, job_id) or job
