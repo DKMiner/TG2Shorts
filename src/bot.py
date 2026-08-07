@@ -317,7 +317,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines += ["", "<b>Active job</b>"]
         lines.append(f"ID: <code>{escape(str(job.get('job_id', active_job_id)))}</code>")
         lines.append(f"State: <code>{escape(str(job.get('status', 'unknown')))}</code>")
-        lines.append(f"Part text: <code>{escape(str(job.get('part_text', '1')))}</code>")
+        lines.append(f"Text: <code>{escape(str(job.get('make_text', '1')))}</code>")
 
         items = job.get("items", [])
         if items:
@@ -495,7 +495,12 @@ async def make(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await msg.reply_text("Queue is empty.")
         return
 
-    part_text = " ".join(context.args).strip() or "1"
+    make_text = " ".join(context.args).strip()
+
+    if cfg.active_template == "ranking":
+        make_text = make_text or "Ranking funny viral videos"
+    else:
+        make_text = make_text or "1"
 
     await msg.reply_text(f"Validating {len(queue)} item(s)...")
 
@@ -512,14 +517,14 @@ async def make(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         job_id,
         update.effective_user.id if update.effective_user else None,
         queue,
-        part_text,
+        make_text,
     )
     set_active_job_id(cfg.active_template, job_id)
     clear_queue(cfg.active_template)
 
     await msg.reply_text(
         f"Job <code>{job_id}</code> created.\n"
-        f"Part text: <code>{escape(part_text)}</code>\n"
+        f"Text: <code>{escape(make_text)}</code>\n"
         f"Processing now...",
         parse_mode="HTML",
     )
