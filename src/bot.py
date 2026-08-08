@@ -40,7 +40,7 @@ from jobs import (
     source_link,
 )
 from worker import process_job, validate_queue_accessible
-
+from whisper_tool import whisper as whisper_cmd
 
 PENDING_KEY = "pending_settings"
 
@@ -553,6 +553,7 @@ def main() -> None:
     application.add_handler(CommandHandler("empty", empty))
     application.add_handler(CommandHandler("make", make))
     application.add_handler(CommandHandler("settings", settings))
+    application.add_handler(CommandHandler("whisper", whisper_cmd))
     application.add_handler(CallbackQueryHandler(settings_callback, pattern=r"^settings:"))
     application.add_handler(CallbackQueryHandler(empty_callback, pattern=r"^empty_(step1|confirm|cancel)$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, settings_reply))

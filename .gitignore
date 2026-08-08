@@ -8,6 +8,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.python-version
 
 # Virtual environment
 .venv/
@@ -61,6 +62,7 @@ temp/
 # -------------------------
 *.txt
 concat.txt
+!requirements.txt
 
 # -------------------------
 # Operating system
