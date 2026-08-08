@@ -42,6 +42,8 @@ from jobs import (
 from worker import process_job, validate_queue_accessible
 from whisper_tool import whisper as whisper_cmd
 
+from youtube_publish import publish as publish_cmd
+
 PENDING_KEY = "pending_settings"
 
 
@@ -500,7 +502,7 @@ async def make(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if cfg.active_template == "ranking":
         make_text = make_text or "Ranking funny viral videos"
     else:
-        make_text = make_text or "1"
+        make_text = make_text or "Violet #meme"
 
     await msg.reply_text(f"Validating {len(queue)} item(s)...")
 
@@ -554,6 +556,7 @@ def main() -> None:
     application.add_handler(CommandHandler("make", make))
     application.add_handler(CommandHandler("settings", settings))
     application.add_handler(CommandHandler("whisper", whisper_cmd))
+    application.add_handler(CommandHandler("publish", publish_cmd))
     application.add_handler(CallbackQueryHandler(settings_callback, pattern=r"^settings:"))
     application.add_handler(CallbackQueryHandler(empty_callback, pattern=r"^empty_(step1|confirm|cancel)$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, settings_reply))

@@ -6,6 +6,7 @@ def ensure_dirs(base_dir: Path) -> dict[str, Path]:
     queues_dir = data_dir / "queues"
     jobs_dir = data_dir / "jobs"
     whisper_dir = data_dir / "whisper"
+    youtube_dir = data_dir / "youtube"
     logs_dir = base_dir / "logs"
 
     paths = {
@@ -13,6 +14,7 @@ def ensure_dirs(base_dir: Path) -> dict[str, Path]:
         "queues": queues_dir,
         "jobs": jobs_dir,
         "whisper": whisper_dir,
+        "youtube": youtube_dir,
         "logs": logs_dir,
     }
 

@@ -26,10 +26,13 @@ env/
 # -------------------------
 .env
 config/config.yaml
+config/youtube_client_secret.json
+data/youtube/token.json
 
 # Optional examples
 config/*.example.yaml
 !config/config.example.yaml
+
 # -------------------------
 # Sessions
 # -------------------------
