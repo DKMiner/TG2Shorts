@@ -25,8 +25,8 @@ YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 YOUTUBE_CLIENT_SECRET = BASE_DIR / "config" / "youtube_client_secret.json"
 YOUTUBE_TOKEN_FILE = BASE_DIR / "data" / "youtube" / "token.json"
 YOUTUBE_WORKDIR = BASE_DIR / "data" / "publish"
-YOUTUBE_CATEGORY_ID = "22"
-YOUTUBE_PRIVACY_STATUS = "public"
+YOUTUBE_CATEGORY_ID = "23"
+YOUTUBE_PRIVACY_STATUS = "private"
 
 
 def _load_credentials(interactive: bool = False) -> Credentials:
@@ -64,10 +64,17 @@ def upload_video(video_path: Path, title: str, description: str) -> str:
             "title": title[:100].strip() or "Violet #meme",
             "description": description,
             "categoryId": YOUTUBE_CATEGORY_ID,
+            "defaultLanguage": "en",
         },
-        "status": {"privacyStatus": YOUTUBE_PRIVACY_STATUS},
+        "status": {
+            "privacyStatus": YOUTUBE_PRIVACY_STATUS,
+            "license": "youtube",
+            "embeddable": True,
+            "selfDeclaredMadeForKids": False,
+            "containsSyntheticMedia": False,
+        },
     }
-    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media, notifySubscribers=True,)
     response = None
     while response is None:
         _, response = request.next_chunk()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from logging.handlers import TimedRotatingFileHandler
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
@@ -20,15 +20,13 @@ def setup_logging(base_dir: Path, template_name: str) -> None:
     console.setFormatter(formatter)
     console.setLevel(logging.INFO)
 
-    # Keep one week of rotated logs. TimedRotatingFileHandler removes old
+    # Keep 50 MB of rotated logs. RotatingFileHandler removes old
     # backups when the next rotation occurs, so log storage stays bounded.
-    file_handler = TimedRotatingFileHandler(
+    file_handler = RotatingFileHandler(
         log_file,
-        when="midnight",
-        interval=1,
-        backupCount=7,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
         encoding="utf-8",
-        utc=True,
     )
     file_handler.setFormatter(formatter)
     file_handler.setLevel(logging.INFO)
