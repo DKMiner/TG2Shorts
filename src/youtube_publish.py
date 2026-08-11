@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from html import escape
 import logging
 import shutil
 import tempfile
@@ -87,10 +88,12 @@ def _keyboard(job_id: str) -> InlineKeyboardMarkup:
 
 
 def _preview_text(job: dict) -> str:
+    title = escape(str(job.get("title", "")))
+    description = escape(str(job.get("description", "")))
     return (
         "<b>YouTube publish preview</b>\n\n"
-        f"<b>Title:</b>\n<code>{job['title']}</code>\n\n"
-        f"<b>Description:</b>\n<code>{job['description']}</code>\n\n"
+        f"<b>Title:</b>\n<code>{title}</code>\n\n"
+        f"<b>Description:</b>\n<code>{description}</code>\n\n"
         "Nothing has been uploaded yet."
     )
 
@@ -128,6 +131,7 @@ async def _download_source(job: dict, work_dir: Path, cfg) -> Path:
 
 async def _do_publish(job: dict, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_config()
+    YOUTUBE_WORKDIR.mkdir(parents=True, exist_ok=True)
     work_dir = Path(tempfile.mkdtemp(prefix="publish_", dir=str(YOUTUBE_WORKDIR)))
     try:
         job["status"] = "downloading"
@@ -139,7 +143,7 @@ async def _do_publish(job: dict, context: ContextTypes.DEFAULT_TYPE) -> None:
         clear_runtime_job(job["job_id"])
         await context.bot.send_message(
             chat_id=int(job["command_chat_id"]),
-            text=f"Published to YouTube successfully.\nVideo ID: <code>{video_id}</code>",
+            text=f"Published to YouTube successfully.\nVideo ID: <code>{escape(video_id)}</code>",
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
