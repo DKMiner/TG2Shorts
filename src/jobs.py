@@ -10,6 +10,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 QUEUES_DIR = DATA_DIR / "queues"
 JOBS_DIR = DATA_DIR / "jobs"
+RUNTIME_JOBS_DIR = JOBS_DIR / "runtime"
 
 
 def now_iso() -> str:
@@ -28,12 +29,24 @@ def active_pointer_file(template_name: str) -> Path:
     return jobs_root(template_name) / "active.json"
 
 
+def runtime_active_pointer_file() -> Path:
+    return RUNTIME_JOBS_DIR / "active.json"
+
+
 def job_folder(template_name: str, job_id: str) -> Path:
     return jobs_root(template_name) / job_id
 
 
+def runtime_job_folder(job_id: str) -> Path:
+    return RUNTIME_JOBS_DIR / job_id
+
+
 def job_manifest_path(template_name: str, job_id: str) -> Path:
     return job_folder(template_name, job_id) / "job.json"
+
+
+def runtime_job_manifest_path(job_id: str) -> Path:
+    return runtime_job_folder(job_id) / "job.json"
 
 
 def load_json(path: Path, default):
@@ -69,7 +82,15 @@ def load_active_job_id(template_name: str) -> str | None:
     data = load_json(active_pointer_file(template_name), None)
     if isinstance(data, dict):
         job_id = data.get("job_id")
-        return str(job_id) if job_id else None
+        if job_id:
+            return str(job_id)
+
+    # Runtime jobs (Whisper / YouTube publish) use the same status surface.
+    runtime = load_json(runtime_active_pointer_file(), None)
+    if isinstance(runtime, dict):
+        job_id = runtime.get("job_id")
+        if job_id:
+            return str(job_id)
     return None
 
 
@@ -83,9 +104,42 @@ def clear_active_job_id(template_name: str) -> None:
         p.unlink()
 
 
+def create_runtime_job(job_id: str, kind: str, **fields) -> dict:
+    job = {
+        "job_id": job_id,
+        "template_name": "runtime",
+        "kind": kind,
+        "status": "queued",
+        "created_at": now_iso(),
+        **fields,
+    }
+    save_runtime_job(job)
+    save_json(runtime_active_pointer_file(), {"job_id": job_id, "set_at": now_iso()})
+    return job
+
+
+def load_runtime_job(job_id: str) -> dict | None:
+    data = load_json(runtime_job_manifest_path(job_id), None)
+    return data if isinstance(data, dict) else None
+
+
+def save_runtime_job(job: dict) -> None:
+    save_json(runtime_job_manifest_path(str(job["job_id"])), job)
+
+
+def clear_runtime_job(job_id: str) -> None:
+    pointer = runtime_active_pointer_file()
+    active = load_json(pointer, None)
+    if isinstance(active, dict) and str(active.get("job_id")) == str(job_id):
+        pointer.unlink(missing_ok=True)
+    shutil.rmtree(runtime_job_folder(str(job_id)), ignore_errors=True)
+
+
 def load_job(template_name: str, job_id: str) -> dict | None:
     data = load_json(job_manifest_path(template_name, job_id), None)
-    return data if isinstance(data, dict) else None
+    if isinstance(data, dict):
+        return data
+    return load_runtime_job(job_id)
 
 
 def save_job(template_name: str, job: dict) -> None:
