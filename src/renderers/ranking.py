@@ -33,9 +33,7 @@ NUMBER_BORDER = 5
 TITLE_BORDER = 5
 
 # "center" preserves the old centered placement.
-# "bottom" anchors the clip to the bottom with CLIP_BOTTOM_MARGIN
-# when there is enough room. If the clip is too tall, the margin is
-# automatically reduced so the clip still fits inside the canvas.
+# "bottom" anchors the foreground clip near the bottom edge.
 CLIP_POSITION = "center"
 CLIP_Y_OFFSET = 0
 CLIP_BOTTOM_MARGIN = 120
@@ -58,6 +56,10 @@ MEDAL_LABELS = {
 
 EMOJI_GAP_SCALE = 0.05
 EMOJI_HEIGHT_SCALE = 1.0
+
+# Static PNGs do not need to be decoded at the output frame rate.
+# One frame per second plus repeat-last is enough for a static image.
+OVERLAY_INPUT_FPS = 1
 
 
 def _run(cmd: list[str]) -> None:
@@ -104,14 +106,13 @@ def _has_audio(path: Path) -> bool:
 
 
 def _get_duration(path: Path) -> float:
-    probe = _ffprobe_json(path)
-    return float(probe["format"]["duration"])
+    return float(_ffprobe_json(path)["format"]["duration"])
 
 
 def _find_font_file() -> Path:
     if not RANKING_ASSET_DIR.exists():
         raise RuntimeError(
-            f"Missing asset folder: {RANKING_ASSET_DIR}"
+            f"Missing ranking asset folder: {RANKING_ASSET_DIR}"
         )
 
     fonts = sorted(
@@ -137,8 +138,10 @@ def _load_font(size: int):
 
 def _wrap_title_to_two_lines(title: str) -> tuple[str, str]:
     words = [w for w in title.split() if w]
+
     if not words:
         return "Ranking", "funny viral videos"
+
     if len(words) == 1:
         return words[0], ""
 
@@ -147,8 +150,12 @@ def _wrap_title_to_two_lines(title: str) -> tuple[str, str]:
     for split in range(1, len(words)):
         line1 = " ".join(words[:split])
         line2 = " ".join(words[split:])
-        score = abs(len(line1) - len(line2))
-        candidate = (score, line1, line2)
+        candidate = (
+            abs(len(line1) - len(line2)),
+            line1,
+            line2,
+        )
+
         if best is None or candidate[0] < best[0]:
             best = candidate
 
@@ -157,11 +164,17 @@ def _wrap_title_to_two_lines(title: str) -> tuple[str, str]:
 
 
 def _pick_title_font_size(title1: str, title2: str) -> int:
-    longest_line = max(len(title1), len(title2), 1)
+    longest_line = max(
+        len(title1),
+        len(title2),
+        1,
+    )
+
     if longest_line <= 14:
         return TITLE_FONT_SIZE
 
     shrink = (longest_line - 14) * 2
+
     return max(
         TITLE_MIN_FONT_SIZE,
         TITLE_FONT_SIZE - shrink,
@@ -169,11 +182,14 @@ def _pick_title_font_size(title1: str, title2: str) -> int:
 
 
 def _pick_number_font_size(width: int) -> int:
-    return max(44, min(NUMBER_FONT_SIZE, width // 13))
+    return max(
+        44,
+        min(NUMBER_FONT_SIZE, width // 13),
+    )
 
 
 def _bottom_y_expression(margin: int) -> str:
-    """Clamp the requested bottom margin to the space actually available."""
+    # requested margin when it fits, otherwise reduce the margin to 0
     return (
         f"'if(gt(H-h-{margin},0),"
         f"H-h-{margin},0)'"
@@ -302,22 +318,35 @@ def _normalize_segment(source: Path, dest: Path, *, cfg) -> None:
     _run(cmd)
 
 
-def _is_emoji_cluster(cluster: str) -> bool:
+def _cluster_is_emoji(cluster: str) -> bool:
     return bool(iter_emoji(cluster))
 
 
-def _measure_cluster(draw, cluster: str, font_size: int) -> int:
-    if _is_emoji_cluster(cluster):
-        emoji_height = max(
+def _measure_cluster(
+    draw: ImageDraw.ImageDraw,
+    cluster: str,
+    font_size: int,
+) -> tuple[int, int]:
+    if _cluster_is_emoji(cluster):
+        height = max(
             1,
             int(font_size * EMOJI_HEIGHT_SCALE),
         )
-        return emoji_height + int(
-            font_size * EMOJI_GAP_SCALE * 2
+        return (
+            height
+            + int(font_size * EMOJI_GAP_SCALE * 2),
+            height,
         )
 
     font = _load_font(font_size)
-    return int(
+    bbox = draw.textbbox(
+        (0, 0),
+        cluster,
+        font=font,
+        stroke_width=0,
+    )
+
+    width = int(
         round(
             draw.textlength(
                 cluster,
@@ -325,6 +354,13 @@ def _measure_cluster(draw, cluster: str, font_size: int) -> int:
             )
         )
     )
+
+    height = max(
+        1,
+        bbox[3] - bbox[1],
+    )
+
+    return width, height
 
 
 def _draw_mixed_text(
@@ -336,34 +372,57 @@ def _draw_mixed_text(
     font_size: int,
     fill: str,
     stroke_width: int,
-    stroke_fill: str = "black",
-    center_x: bool = False,
+    center_x: bool,
     emoji_assets: dict[str, Path],
-) -> None:
+) -> tuple[int, int]:
     draw = ImageDraw.Draw(image)
     font = _load_font(font_size)
 
     import regex
-    clusters = regex.findall(r"\X", text)
 
-    total_width = sum(
+    clusters = regex.findall(
+        r"\X",
+        text,
+    )
+
+    measurements = [
         _measure_cluster(
             draw,
             cluster,
             font_size,
         )
         for cluster in clusters
+    ]
+
+    total_width = sum(
+        width
+        for width, _ in measurements
+    )
+
+    max_height = max(
+        (
+            height
+            for _, height in measurements
+        ),
+        default=font_size,
     )
 
     cursor_x = (
-        int((image.width - total_width) / 2)
+        int(
+            (image.width - total_width)
+            / 2
+        )
         if center_x
         else x
     )
 
-    for cluster in clusters:
-        if _is_emoji_cluster(cluster):
+    for cluster, (advance, _) in zip(
+        clusters,
+        measurements,
+    ):
+        if _cluster_is_emoji(cluster):
             emoji_path = emoji_assets.get(cluster)
+
             if emoji_path is None:
                 raise RuntimeError(
                     f"Missing cached Twemoji asset for {cluster!r}"
@@ -373,6 +432,7 @@ def _draw_mixed_text(
                 1,
                 int(font_size * EMOJI_HEIGHT_SCALE),
             )
+
             emoji = resize_emoji(
                 emoji_path,
                 emoji_height,
@@ -381,16 +441,22 @@ def _draw_mixed_text(
             gap = int(
                 font_size * EMOJI_GAP_SCALE
             )
+
             cursor_x += gap
 
             emoji_y = y + int(
-                (font_size - emoji.height) / 2
+                (font_size - emoji.height)
+                / 2
             )
+
             image.alpha_composite(
                 emoji,
                 (cursor_x, emoji_y),
             )
-            cursor_x += emoji.width + gap
+
+            cursor_x += (
+                emoji.width + gap
+            )
             continue
 
         draw.text(
@@ -399,56 +465,271 @@ def _draw_mixed_text(
             font=font,
             fill=fill,
             stroke_width=stroke_width,
-            stroke_fill=stroke_fill,
-        )
-        cursor_x += int(
-            round(
-                draw.textlength(
-                    cluster,
-                    font=font,
-                )
-            )
+            stroke_fill="black",
         )
 
+        cursor_x += advance
 
-def _write_text_overlay(
+    return total_width, max_height
+
+
+def _make_text_image(
     *,
-    output_path: Path,
-    width: int,
-    height: int,
     text: str,
-    x: int,
-    y: int,
     font_size: int,
     fill: str,
     stroke_width: int,
-    center_x: bool,
     emoji_assets: dict[str, Path],
-) -> None:
+    padding: int = 12,
+    center_x: bool = False,
+    canvas_width: int | None = None,
+) -> Image.Image:
+    probe = Image.new(
+        "RGBA",
+        (4000, 400),
+        (0, 0, 0, 0),
+    )
+
+    dummy_draw = ImageDraw.Draw(probe)
+
+    import regex
+
+    clusters = regex.findall(
+        r"\X",
+        text,
+    )
+
+    total_width = 0
+    max_height = font_size
+
+    for cluster in clusters:
+        cluster_width, cluster_height = (
+            _measure_cluster(
+                dummy_draw,
+                cluster,
+                font_size,
+            )
+        )
+        total_width += cluster_width
+        max_height = max(
+            max_height,
+            cluster_height,
+        )
+
+    image_width = (
+        canvas_width
+        if canvas_width is not None
+        else max(
+            1,
+            total_width + padding * 2,
+        )
+    )
+
     image = Image.new(
         "RGBA",
-        (width, height),
+        (
+            image_width,
+            max_height + padding * 2,
+        ),
         (0, 0, 0, 0),
     )
 
     _draw_mixed_text(
         image,
         text,
-        x=x,
-        y=y,
+        x=padding,
+        y=padding,
         font_size=font_size,
         fill=fill,
         stroke_width=stroke_width,
-        stroke_fill="black",
         center_x=center_x,
         emoji_assets=emoji_assets,
     )
 
-    output_path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
+    return image
+
+
+def _write_static_overlay(
+    *,
+    cfg,
+    title1: str,
+    title2: str,
+    number_labels: list[str],
+    emoji_assets: dict[str, Path],
+    output_path: Path,
+) -> None:
+    width = cfg.template.video.width
+    title_size = _pick_title_font_size(
+        title1,
+        title2,
     )
-    image.save(output_path, "PNG")
+    number_size = _pick_number_font_size(
+        width
+    )
+
+    second_title_y = (
+        TITLE_TOP_Y
+        + title_size
+        + TITLE_LINE_SPACING
+    )
+
+    last_number_y = (
+        NUMBER_START_Y
+        + (len(number_labels) - 1)
+        * NUMBER_GAP
+    )
+
+    bottom = max(
+        second_title_y + title_size
+        if title2.strip()
+        else TITLE_TOP_Y + title_size,
+        last_number_y + number_size,
+    ) + 24
+
+    image = Image.new(
+        "RGBA",
+        (width, bottom),
+        (0, 0, 0, 0),
+    )
+
+    _draw_mixed_text(
+        image,
+        title1,
+        x=0,
+        y=TITLE_TOP_Y,
+        font_size=title_size,
+        fill="white",
+        stroke_width=TITLE_BORDER,
+        center_x=True,
+        emoji_assets=emoji_assets,
+    )
+
+    if title2.strip():
+        _draw_mixed_text(
+            image,
+            title2,
+            x=0,
+            y=second_title_y,
+            font_size=title_size,
+            fill="white",
+            stroke_width=TITLE_BORDER,
+            center_x=True,
+            emoji_assets=emoji_assets,
+        )
+
+    for position, label in enumerate(
+        number_labels,
+        start=1,
+    ):
+        color = NUMBER_COLORS[
+            (position - 1)
+            % len(NUMBER_COLORS)
+        ]
+
+        _draw_mixed_text(
+            image,
+            label,
+            x=NUMBER_LEFT_X,
+            y=(
+                NUMBER_START_Y
+                + (position - 1)
+                * NUMBER_GAP
+            ),
+            font_size=number_size,
+            fill=color,
+            stroke_width=NUMBER_BORDER,
+            center_x=False,
+            emoji_assets=emoji_assets,
+        )
+
+    image.save(
+        output_path,
+        "PNG",
+    )
+
+
+def _write_caption_overlay(
+    *,
+    caption: str,
+    number: int,
+    emoji_assets: dict[str, Path],
+    output_path: Path,
+) -> None:
+    color = NUMBER_COLORS[
+        (number - 1)
+        % len(NUMBER_COLORS)
+    ]
+
+    image = _make_text_image(
+        text=caption,
+        font_size=CAPTION_FONT_SIZE,
+        fill=color,
+        stroke_width=NUMBER_BORDER,
+        emoji_assets=emoji_assets,
+    )
+
+    image.save(
+        output_path,
+        "PNG",
+    )
+
+
+def _build_overlay_filter(
+    *,
+    overlays: list[
+        tuple[Path, float, float, int, int]
+    ],
+    total_duration: float,
+) -> tuple[list[str], str]:
+    """
+    Build a small number of static-image overlay streams.
+
+    Each static image is looped at 1 fps rather than 30 fps, and
+    repeat-last keeps it alive while enable() controls visibility.
+    """
+    inputs: list[str] = []
+    filters: list[str] = []
+
+    current = "0:v"
+
+    for index, (
+        path,
+        start,
+        end,
+        x,
+        y,
+    ) in enumerate(
+        overlays,
+        start=1,
+    ):
+        inputs += [
+            "-loop",
+            "1",
+            "-framerate",
+            str(OVERLAY_INPUT_FPS),
+            "-t",
+            f"{total_duration:.3f}",
+            "-i",
+            str(path),
+        ]
+
+        next_label = f"ov{index}"
+
+        filters.append(
+            f"[{current}][{index}:v]"
+            f"overlay={x}:{y}:"
+            f"eof_action=repeat:repeatlast=1:"
+            f"enable='between(t,{start:.3f},{end:.3f})'"
+            f"[{next_label}]"
+        )
+
+        current = next_label
+
+    filters.append(
+        f"[{current}]format=yuv420p[v]"
+    )
+
+    return inputs, ";".join(filters)
 
 
 def _make_assigned_numbers(
@@ -472,6 +753,7 @@ def _short_caption(
     text = " ".join((text or "").split())
     if not text:
         return ""
+
     return textwrap.shorten(
         text,
         width=limit,
@@ -479,61 +761,28 @@ def _short_caption(
     )
 
 
-def _build_overlay_inputs(
-    *,
-    overlays: list[tuple[Path, float, float]],
-    total_duration: float,
-    fps: int,
-) -> tuple[list[str], str]:
-    """Build finite PNG inputs and a single continuous overlay chain."""
-    inputs: list[str] = []
-    filters: list[str] = []
-    current = "0:v"
-
-    for index, (path, start, end) in enumerate(
-        overlays,
-        start=1,
-    ):
-        inputs += [
-            "-loop",
-            "1",
-            "-framerate",
-            str(fps),
-            "-t",
-            f"{total_duration:.3f}",
-            "-i",
-            str(path),
-        ]
-
-        next_label = f"ov{index}"
-        filters.append(
-            f"[{current}][{index}:v]overlay=0:0:"
-            f"eof_action=repeat:repeatlast=1:"
-            f"enable='between(t,{start:.3f},{end:.3f})'"
-            f"[{next_label}]"
-        )
-        current = next_label
-
-    filters.append(
-        f"[{current}]format=yuv420p[v]"
-    )
-
-    return inputs, ";".join(filters)
-
-
 def render_job(cfg, job_id: str) -> Path:
     template_name = cfg.active_template
-    job = load_job(template_name, job_id)
+
+    job = load_job(
+        template_name,
+        job_id,
+    )
     if job is None:
         raise RuntimeError(
             f"Job {job_id} not found"
         )
 
     rendered_dir = (
-        job_folder(template_name, job_id)
+        job_folder(
+            template_name,
+            job_id,
+        )
         / "rendered"
     )
-    segments_dir = rendered_dir / "segments"
+    segments_dir = (
+        rendered_dir / "segments"
+    )
 
     rendered_dir.mkdir(
         parents=True,
@@ -546,18 +795,25 @@ def render_job(cfg, job_id: str) -> Path:
 
     job["status"] = "rendering"
     job["render_started_at"] = now_iso()
-    save_job(template_name, job)
+    save_job(
+        template_name,
+        job,
+    )
 
     make_text = str(
         job.get("make_text")
         or "Ranking funny viral videos"
     )
+
     items = job.get("items", [])
     if not items:
         raise RuntimeError(
             "Ranking job has no items"
         )
 
+    # --------------------------------------------------------
+    # Build sequence: intro, clip, transition..., outro.
+    # --------------------------------------------------------
     sequence: list[tuple[Path, str]] = []
 
     if cfg.template.render.intro:
@@ -565,15 +821,22 @@ def render_job(cfg, job_id: str) -> Path:
             raise RuntimeError(
                 "Intro is enabled but assets.intro is missing"
             )
+
         sequence.append(
-            (cfg.template.assets.intro, "intro")
+            (
+                cfg.template.assets.intro,
+                "intro",
+            )
         )
 
     for index, item in enumerate(
         items,
         start=1,
     ):
-        local_path = item.get("local_path")
+        local_path = item.get(
+            "local_path"
+        )
+
         if not local_path:
             raise RuntimeError(
                 f"Job item #{index} has no local_path"
@@ -591,6 +854,7 @@ def render_job(cfg, job_id: str) -> Path:
                 raise RuntimeError(
                     "Transition is enabled but assets.transition is missing"
                 )
+
             sequence.append(
                 (
                     cfg.template.assets.transition,
@@ -603,16 +867,28 @@ def render_job(cfg, job_id: str) -> Path:
             raise RuntimeError(
                 "Outro is enabled but assets.outro is missing"
             )
+
         sequence.append(
-            (cfg.template.assets.outro, "outro")
+            (
+                cfg.template.assets.outro,
+                "outro",
+            )
         )
 
     if not sequence:
-        raise RuntimeError("Nothing to render")
+        raise RuntimeError(
+            "Nothing to render"
+        )
 
+    # --------------------------------------------------------
+    # Normalize clips/assets to the configured canvas.
+    # --------------------------------------------------------
     segment_paths: list[Path] = []
 
-    for index, (source, label) in enumerate(
+    for index, (
+        source,
+        label,
+    ) in enumerate(
         sequence,
         start=1,
     ):
@@ -620,13 +896,18 @@ def render_job(cfg, job_id: str) -> Path:
             segments_dir
             / f"{index:03d}_{label}.mp4"
         )
+
         _normalize_segment(
             source,
             dest,
             cfg=cfg,
         )
+
         segment_paths.append(dest)
 
+    # --------------------------------------------------------
+    # Calculate exact clip/transition/outro timestamps.
+    # --------------------------------------------------------
     durations = [
         _get_duration(path)
         for path in segment_paths
@@ -634,24 +915,36 @@ def render_job(cfg, job_id: str) -> Path:
 
     clip_starts: list[float] = []
     outro_start: float | None = None
+
     cursor = 0.0
 
-    for (_, label), duration in zip(
+    for (
+        (_, label),
+        duration,
+    ) in zip(
         sequence,
         durations,
     ):
         if label.startswith("clip_"):
             clip_starts.append(cursor)
+
         if label == "outro":
             outro_start = cursor
+
         cursor += duration
 
-    if not clip_starts:
-        raise RuntimeError("Ranking job has no clips")
-
     total_duration = cursor
-    title_start = clip_starts[0]
-    title_end = (
+
+    if not clip_starts:
+        raise RuntimeError(
+            "Ranking job has no clips"
+        )
+
+    first_clip_start = clip_starts[0]
+
+    # Overlays disappear only for intro/outro. Transitions are
+    # intentionally inside this interval.
+    overlay_end = (
         outro_start
         if outro_start is not None
         else total_duration
@@ -659,177 +952,88 @@ def render_job(cfg, job_id: str) -> Path:
 
     assigned_numbers = _make_assigned_numbers(
         len(clip_starts),
-        seed_text=job_id,
+        job_id,
     )
 
-    title1, title2 = _wrap_title_to_two_lines(
-        make_text
-    )
-    title_size = _pick_title_font_size(
-        title1,
-        title2,
-    )
-    number_size = _pick_number_font_size(
-        cfg.template.video.width
-    )
-
-    captions = [
-        _short_caption(
-            str(item.get("caption") or "").strip()
+    title1, title2 = (
+        _wrap_title_to_two_lines(
+            make_text
         )
-        for item in items
-    ]
+    )
 
-    emoji_texts = [
-        title1,
-        title2,
-        *captions,
-        *(
-            MEDAL_LABELS.get(
-                number,
-                f"{number}.",
+    caption_items: list[tuple[int, str, int]] = []
+
+    for index, item in enumerate(
+        items,
+        start=1,
+    ):
+        caption = str(
+            item.get("caption")
+            or ""
+        ).strip()
+
+        if caption:
+            caption_items.append(
+                (
+                    index,
+                    _short_caption(caption),
+                    assigned_numbers[index - 1],
+                )
             )
-            for number in range(
-                1,
-                len(assigned_numbers) + 1,
-            )
-        ),
+
+    # --------------------------------------------------------
+    # Download only emojis actually used in title/ranks/captions.
+    # --------------------------------------------------------
+    number_labels = [
+        MEDAL_LABELS.get(
+            position,
+            f"{position}.",
+        )
+        for position in range(
+            1,
+            len(items) + 1,
+        )
     ]
 
     emoji_assets = ensure_text_emoji_assets(
         BASE_DIR,
-        emoji_texts,
-    )
-
-    overlays: list[tuple[Path, float, float]] = []
-    width = cfg.template.video.width
-    height = cfg.template.video.height
-
-    title1_png = rendered_dir / "title_1.png"
-    _write_text_overlay(
-        output_path=title1_png,
-        width=width,
-        height=height,
-        text=title1,
-        x=0,
-        y=TITLE_TOP_Y,
-        font_size=title_size,
-        fill="white",
-        stroke_width=TITLE_BORDER,
-        center_x=True,
-        emoji_assets=emoji_assets,
-    )
-    overlays.append(
-        (title1_png, title_start, title_end)
-    )
-
-    if title2.strip():
-        title2_png = rendered_dir / "title_2.png"
-        _write_text_overlay(
-            output_path=title2_png,
-            width=width,
-            height=height,
-            text=title2,
-            x=0,
-            y=(
-                TITLE_TOP_Y
-                + title_size
-                + TITLE_LINE_SPACING
-            ),
-            font_size=title_size,
-            fill="white",
-            stroke_width=TITLE_BORDER,
-            center_x=True,
-            emoji_assets=emoji_assets,
-        )
-        overlays.append(
-            (title2_png, title_start, title_end)
-        )
-
-    for rank in range(
-        1,
-        len(assigned_numbers) + 1,
-    ):
-        label = MEDAL_LABELS.get(
-            rank,
-            f"{rank}.",
-        )
-        number_png = (
-            rendered_dir
-            / f"number_{rank:03d}.png"
-        )
-
-        _write_text_overlay(
-            output_path=number_png,
-            width=width,
-            height=height,
-            text=label,
-            x=NUMBER_LEFT_X,
-            y=(
-                NUMBER_START_Y
-                + (rank - 1) * NUMBER_GAP
-            ),
-            font_size=number_size,
-            fill=NUMBER_COLORS[
-                (rank - 1)
-                % len(NUMBER_COLORS)
+        [
+            title1,
+            title2,
+            *number_labels,
+            *[
+                caption
+                for _, caption, _
+                in caption_items
             ],
-            stroke_width=NUMBER_BORDER,
-            center_x=False,
-            emoji_assets=emoji_assets,
-        )
-        overlays.append(
-            (number_png, title_start, title_end)
-        )
+        ],
+    )
 
-    for index, (item, rank, start_time) in enumerate(
-        zip(items, assigned_numbers, clip_starts),
-        start=1,
-    ):
-        caption = captions[index - 1]
-        if not caption:
-            continue
+    # --------------------------------------------------------
+    # Merge normalized segments.
+    # --------------------------------------------------------
+    merged_base = (
+        rendered_dir
+        / "merged_base.mp4"
+    )
+    concat_list = (
+        rendered_dir
+        / "concat.txt"
+    )
 
-        caption_png = (
-            rendered_dir
-            / f"caption_{index:03d}.png"
-        )
-
-        _write_text_overlay(
-            output_path=caption_png,
-            width=width,
-            height=height,
-            text=caption,
-            x=CAPTION_LEFT_X,
-            y=(
-                NUMBER_START_Y
-                + (rank - 1) * NUMBER_GAP
-                + CAPTION_OFFSET_Y
-            ),
-            font_size=CAPTION_FONT_SIZE,
-            fill=NUMBER_COLORS[
-                (rank - 1)
-                % len(NUMBER_COLORS)
-            ],
-            stroke_width=NUMBER_BORDER,
-            center_x=False,
-            emoji_assets=emoji_assets,
-        )
-        overlays.append(
-            (caption_png, start_time, title_end)
-        )
-
-    merged_base = rendered_dir / "merged_base.mp4"
-    concat_list = rendered_dir / "concat.txt"
-
-    with concat_list.open("w", encoding="utf-8") as file:
-        for segment in segment_paths:
+    with concat_list.open(
+        "w",
+        encoding="utf-8",
+    ) as f:
+        for seg in segment_paths:
             escaped = (
-                str(segment)
+                str(seg)
                 .replace("\\", "\\\\")
                 .replace("'", "'\\''")
             )
-            file.write(f"file '{escaped}'\n")
+            f.write(
+                f"file '{escaped}'\n"
+            )
 
     _run(
         [
@@ -847,13 +1051,93 @@ def render_job(cfg, job_id: str) -> Path:
         ]
     )
 
-    overlay_inputs, overlay_filter = _build_overlay_inputs(
-        overlays=overlays,
-        total_duration=total_duration,
-        fps=cfg.template.video.fps,
+    # --------------------------------------------------------
+    # One static overlay: title + every number.
+    # It is only active from first clip to start of outro.
+    # --------------------------------------------------------
+    static_overlay = (
+        rendered_dir
+        / "ranking_static.png"
     )
 
-    final_path = rendered_dir / "final.mp4"
+    _write_static_overlay(
+        cfg=cfg,
+        title1=title1,
+        title2=title2,
+        number_labels=number_labels,
+        emoji_assets=emoji_assets,
+        output_path=static_overlay,
+    )
+
+    overlays: list[
+        tuple[Path, float, float, int, int]
+    ] = [
+        (
+            static_overlay,
+            first_clip_start,
+            overlay_end,
+            0,
+            0,
+        )
+    ]
+
+    # --------------------------------------------------------
+    # Each caption is a small cropped PNG, not a full 1080x1920
+    # overlay. This dramatically reduces the final filter cost.
+    # --------------------------------------------------------
+    caption_paths: list[Path] = []
+
+    for index, caption, number in caption_items:
+        caption_path = (
+            rendered_dir
+            / f"caption_{index:03d}.png"
+        )
+
+        _write_caption_overlay(
+            caption=caption,
+            number=number,
+            emoji_assets=emoji_assets,
+            output_path=caption_path,
+        )
+
+        y = (
+            NUMBER_START_Y
+            + (number - 1)
+            * NUMBER_GAP
+            + CAPTION_OFFSET_Y
+        )
+
+        start = clip_starts[
+            index - 1
+        ]
+
+        overlays.append(
+            (
+                caption_path,
+                start,
+                overlay_end,
+                CAPTION_LEFT_X,
+                y,
+            )
+        )
+        caption_paths.append(
+            caption_path
+        )
+
+    # --------------------------------------------------------
+    # Final overlay pass.
+    # --------------------------------------------------------
+    extra_inputs, overlay_filter = (
+        _build_overlay_filter(
+            overlays=overlays,
+            total_duration=total_duration,
+        )
+    )
+
+    final_path = (
+        rendered_dir
+        / "final.mp4"
+    )
 
     _run(
         [
@@ -861,7 +1145,7 @@ def render_job(cfg, job_id: str) -> Path:
             "-y",
             "-i",
             str(merged_base),
-            *overlay_inputs,
+            *extra_inputs,
             "-filter_complex",
             overlay_filter,
             "-map",
@@ -884,26 +1168,48 @@ def render_job(cfg, job_id: str) -> Path:
         ]
     )
 
-    concat_list.unlink(missing_ok=True)
-    merged_base.unlink(missing_ok=True)
+    # Cleanup large intermediate files and temporary overlays.
+    concat_list.unlink(
+        missing_ok=True
+    )
+    merged_base.unlink(
+        missing_ok=True
+    )
+    static_overlay.unlink(
+        missing_ok=True
+    )
 
-    for path in rendered_dir.glob("*.png"):
-        path.unlink(missing_ok=True)
-    for path in rendered_dir.glob("*.txt"):
-        path.unlink(missing_ok=True)
+    for path in caption_paths:
+        path.unlink(
+            missing_ok=True
+        )
 
     shutil.rmtree(
         segments_dir,
         ignore_errors=True,
     )
 
-    job = load_job(
-        template_name,
-        job_id,
-    ) or job
+    job = (
+        load_job(
+            template_name,
+            job_id,
+        )
+        or job
+    )
+
     job["status"] = "rendered"
+    job["render_started_at"] = (
+        job.get("render_started_at")
+        or now_iso()
+    )
     job["rendered_at"] = now_iso()
-    job["rendered_path"] = str(final_path)
-    save_job(template_name, job)
+    job["rendered_path"] = str(
+        final_path
+    )
+
+    save_job(
+        template_name,
+        job,
+    )
 
     return final_path
