@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
+import regex
 from urllib.request import Request, urlopen
 
 from PIL import Image
@@ -14,8 +14,6 @@ TWEMOJI_BASE_URL = (
     f"{TWEMOJI_VERSION}/assets/72x72"
 )
 
-# Broad Unicode ranges used to decide which grapheme clusters are worth
-# asking Twemoji about. Unsupported clusters are handled by the 404 check.
 _EMOJI_RANGES = (
     (0x1F000, 0x1FAFF),
     (0x1FC00, 0x1FFFD),
@@ -24,7 +22,7 @@ _EMOJI_RANGES = (
     (0x2B00, 0x2BFF),
 )
 
-_GRAPHEME_RE = re.compile(r"\X", re.UNICODE)
+_GRAPHEME_RE = regex.compile(r"\X")
 
 
 def _asset_dir(base_dir: Path) -> Path:
