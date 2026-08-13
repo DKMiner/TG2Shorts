@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
 import json
 import random
 import shutil
 import subprocess
 import textwrap
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -32,7 +32,7 @@ CAPTION_OFFSET_Y = 0
 NUMBER_BORDER = 5
 TITLE_BORDER = 5
 
-# "center" preserves the old centered placement.
+# "center" preserves the centered placement.
 # "bottom" anchors the foreground clip near the bottom edge.
 CLIP_POSITION = "center"
 CLIP_Y_OFFSET = 0
@@ -57,8 +57,9 @@ MEDAL_LABELS = {
 EMOJI_GAP_SCALE = 0.05
 EMOJI_HEIGHT_SCALE = 1.0
 
-# Static PNGs do not need to be decoded at the output frame rate.
-# One frame per second plus repeat-last is enough for a static image.
+# Static images only need a single frame and are repeated by the
+# overlay filter. This keeps the final render much lighter than
+# 30-fps PNG inputs.
 OVERLAY_INPUT_FPS = 1
 
 
@@ -69,6 +70,7 @@ def _run(cmd: list[str]) -> None:
         text=True,
         capture_output=True,
     )
+
     if result.returncode != 0:
         raise subprocess.CalledProcessError(
             result.returncode,
@@ -189,7 +191,8 @@ def _pick_number_font_size(width: int) -> int:
 
 
 def _bottom_y_expression(margin: int) -> str:
-    # requested margin when it fits, otherwise reduce the margin to 0
+    # Requested margin when it fits; otherwise reduce the margin so
+    # the foreground clip remains inside the final canvas.
     return (
         f"'if(gt(H-h-{margin},0),"
         f"H-h-{margin},0)'"
@@ -220,19 +223,26 @@ def _build_base_filter(cfg) -> str:
                 CLIP_BOTTOM_MARGIN
             )
         else:
-            foreground_y = f"(H-h)/2+({CLIP_Y_OFFSET})"
+            foreground_y = (
+                f"(H-h)/2+({CLIP_Y_OFFSET})"
+            )
 
         return (
             f"[0:v]split=2[fgsrc][bgsrc];"
-            f"[bgsrc]scale={width}:{height}:"
+            f"[bgsrc]"
+            f"scale={width}:{height}:"
             f"force_original_aspect_ratio=increase,"
             f"crop={width}:{height},"
             f"boxblur=20:1[bg];"
-            f"[fgsrc]scale={width}:{height}:"
-            f"force_original_aspect_ratio=decrease[fg];"
-            f"[bg][fg]overlay=(W-w)/2:{foreground_y}:"
+            f"[fgsrc]"
+            f"scale={width}:{height}:"
+            f"force_original_aspect_ratio=decrease"
+            f"[fg];"
+            f"[bg][fg]"
+            f"overlay=(W-w)/2:{foreground_y}:"
             f"eof_action=pass:repeatlast=1,"
-            f"format=yuv420p,setsar=1,fps={fps}[vbase]"
+            f"format=yuv420p,setsar=1,fps={fps}"
+            f"[vbase]"
         )
 
     if CLIP_POSITION == "bottom":
@@ -240,17 +250,28 @@ def _build_base_filter(cfg) -> str:
             CLIP_BOTTOM_MARGIN
         )
     else:
-        pad_y = f"(oh-ih)/2+({CLIP_Y_OFFSET})"
+        pad_y = (
+            f"(oh-ih)/2+({CLIP_Y_OFFSET})"
+        )
 
     return (
-        f"[0:v]scale={width}:{height}:"
+        f"[0:v]"
+        f"scale={width}:{height}:"
         f"force_original_aspect_ratio=decrease,"
-        f"pad={width}:{height}:(ow-iw)/2:{pad_y}:"
-        f"color=black,format=yuv420p,setsar=1,fps={fps}[vbase]"
+        f"pad={width}:{height}:"
+        f"(ow-iw)/2:{pad_y}:"
+        f"color=black,"
+        f"format=yuv420p,setsar=1,fps={fps}"
+        f"[vbase]"
     )
 
 
-def _normalize_segment(source: Path, dest: Path, *, cfg) -> None:
+def _normalize_segment(
+    source: Path,
+    dest: Path,
+    *,
+    cfg,
+) -> None:
     if not source.exists():
         raise RuntimeError(
             f"Source clip missing: {source}"
@@ -286,7 +307,9 @@ def _normalize_segment(source: Path, dest: Path, *, cfg) -> None:
             "-map",
             "0:a:0?",
             "-af",
-            "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo",
+            "aresample=48000,"
+            "aformat=sample_fmts=fltp:"
+            "channel_layouts=stereo",
         ]
     else:
         cmd += [
@@ -425,12 +448,16 @@ def _draw_mixed_text(
 
             if emoji_path is None:
                 raise RuntimeError(
-                    f"Missing cached Twemoji asset for {cluster!r}"
+                    f"Missing cached Twemoji asset "
+                    f"for {cluster!r}"
                 )
 
             emoji_height = max(
                 1,
-                int(font_size * EMOJI_HEIGHT_SCALE),
+                int(
+                    font_size
+                    * EMOJI_HEIGHT_SCALE
+                ),
             )
 
             emoji = resize_emoji(
@@ -444,9 +471,12 @@ def _draw_mixed_text(
 
             cursor_x += gap
 
-            emoji_y = y + int(
-                (font_size - emoji.height)
-                / 2
+            emoji_y = (
+                y
+                + int(
+                    (font_size - emoji.height)
+                    / 2
+                )
             )
 
             image.alpha_composite(
@@ -481,8 +511,6 @@ def _make_text_image(
     stroke_width: int,
     emoji_assets: dict[str, Path],
     padding: int = 12,
-    center_x: bool = False,
-    canvas_width: int | None = None,
 ) -> Image.Image:
     probe = Image.new(
         "RGBA",
@@ -510,25 +538,17 @@ def _make_text_image(
                 font_size,
             )
         )
+
         total_width += cluster_width
         max_height = max(
             max_height,
             cluster_height,
         )
 
-    image_width = (
-        canvas_width
-        if canvas_width is not None
-        else max(
-            1,
-            total_width + padding * 2,
-        )
-    )
-
     image = Image.new(
         "RGBA",
         (
-            image_width,
+            max(1, total_width + padding * 2),
             max_height + padding * 2,
         ),
         (0, 0, 0, 0),
@@ -542,7 +562,7 @@ def _make_text_image(
         font_size=font_size,
         fill=fill,
         stroke_width=stroke_width,
-        center_x=center_x,
+        center_x=False,
         emoji_assets=emoji_assets,
     )
 
@@ -559,10 +579,12 @@ def _write_static_overlay(
     output_path: Path,
 ) -> None:
     width = cfg.template.video.width
+
     title_size = _pick_title_font_size(
         title1,
         title2,
     )
+
     number_size = _pick_number_font_size(
         width
     )
@@ -579,12 +601,20 @@ def _write_static_overlay(
         * NUMBER_GAP
     )
 
-    bottom = max(
-        second_title_y + title_size
-        if title2.strip()
-        else TITLE_TOP_Y + title_size,
-        last_number_y + number_size,
-    ) + 24
+    bottom = (
+        max(
+            (
+                second_title_y
+                + title_size
+                if title2.strip()
+                else TITLE_TOP_Y
+                + title_size
+            ),
+            last_number_y
+            + number_size,
+        )
+        + 24
+    )
 
     image = Image.new(
         "RGBA",
@@ -674,32 +704,113 @@ def _write_caption_overlay(
     )
 
 
-def _build_overlay_filter(
-    *,
-    overlays: list[
-        tuple[Path, float, float, int, int]
-    ],
-    total_duration: float,
-) -> tuple[list[str], str]:
+def _merge_normalized_segments(
+    segments: list[Path],
+    output_path: Path,
+) -> None:
     """
-    Build a small number of static-image overlay streams.
+    Concatenate normalized segments with the concat FILTER rather than
+    the concat demuxer / stream-copy path.
 
-    Each static image is looped at 1 fps rather than 30 fps, and
-    repeat-last keeps it alive while enable() controls visibility.
+    Every segment starts at PTS 0, and the concat filter creates one
+    continuous video/audio timeline. The Python timing cursor below is
+    based on the same segment durations, so overlay timestamps line up.
+    """
+    if not segments:
+        raise RuntimeError(
+            "No normalized segments to merge"
+        )
+
+    inputs: list[str] = []
+    filter_parts: list[str] = []
+
+    for index, segment in enumerate(
+        segments
+    ):
+        inputs += [
+            "-i",
+            str(segment),
+        ]
+
+        filter_parts.append(
+            f"[{index}:v]"
+            f"setpts=PTS-STARTPTS"
+            f"[v{index}]"
+        )
+
+        filter_parts.append(
+            f"[{index}:a]"
+            f"asetpts=PTS-STARTPTS"
+            f"[a{index}]"
+        )
+
+    concat_inputs = "".join(
+        f"[v{i}][a{i}]"
+        for i in range(len(segments))
+    )
+
+    filter_parts.append(
+        f"{concat_inputs}"
+        f"concat=n={len(segments)}:v=1:a=1"
+        f"[vout][aout]"
+    )
+
+    _run(
+        [
+            "ffmpeg",
+            "-y",
+            *inputs,
+            "-filter_complex",
+            ";".join(filter_parts),
+            "-map",
+            "[vout]",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+    )
+
+
+def _build_overlay_command(
+    *,
+    merged_base: Path,
+    overlay_entries: list[tuple[Path, float, float]],
+    total_duration: float,
+    output_path: Path,
+) -> list[str]:
+    """
+    Create one final FFmpeg command for the static overlays.
+
+    Overlay visibility is controlled only by enable() intervals.
+    Since merged_base has one continuous timestamp timeline, transitions
+    are ordinary frames and the overlays remain visible through them.
     """
     inputs: list[str] = []
     filters: list[str] = []
-
     current = "0:v"
 
     for index, (
-        path,
+        image_path,
         start,
         end,
-        x,
-        y,
     ) in enumerate(
-        overlays,
+        overlay_entries,
         start=1,
     ):
         inputs += [
@@ -710,15 +821,17 @@ def _build_overlay_filter(
             "-t",
             f"{total_duration:.3f}",
             "-i",
-            str(path),
+            str(image_path),
         ]
 
         next_label = f"ov{index}"
 
         filters.append(
-            f"[{current}][{index}:v]"
-            f"overlay={x}:{y}:"
-            f"eof_action=repeat:repeatlast=1:"
+            f"[{current}]"
+            f"[{index}:v]"
+            f"overlay=0:0:"
+            f"eof_action=repeat:"
+            f"repeatlast=1:"
             f"enable='between(t,{start:.3f},{end:.3f})'"
             f"[{next_label}]"
         )
@@ -729,7 +842,32 @@ def _build_overlay_filter(
         f"[{current}]format=yuv420p[v]"
     )
 
-    return inputs, ";".join(filters)
+    return [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(merged_base),
+        *inputs,
+        "-filter_complex",
+        ";".join(filters),
+        "-map",
+        "[v]",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "20",
+        "-c:a",
+        "copy",
+        "-t",
+        f"{total_duration:.3f}",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
 
 
 def _make_assigned_numbers(
@@ -740,17 +878,25 @@ def _make_assigned_numbers(
         return [1]
 
     rng = random.Random(seed_text)
-    nums = list(range(2, count + 1))
-    rng.shuffle(nums)
-    nums.append(1)
-    return nums
+
+    numbers = list(
+        range(2, count + 1)
+    )
+
+    rng.shuffle(numbers)
+    numbers.append(1)
+
+    return numbers
 
 
 def _short_caption(
     text: str,
     limit: int = 28,
 ) -> str:
-    text = " ".join((text or "").split())
+    text = " ".join(
+        (text or "").split()
+    )
+
     if not text:
         return ""
 
@@ -761,13 +907,17 @@ def _short_caption(
     )
 
 
-def render_job(cfg, job_id: str) -> Path:
+def render_job(
+    cfg,
+    job_id: str,
+) -> Path:
     template_name = cfg.active_template
 
     job = load_job(
         template_name,
         job_id,
     )
+
     if job is None:
         raise RuntimeError(
             f"Job {job_id} not found"
@@ -780,14 +930,17 @@ def render_job(cfg, job_id: str) -> Path:
         )
         / "rendered"
     )
+
     segments_dir = (
-        rendered_dir / "segments"
+        rendered_dir
+        / "segments"
     )
 
     rendered_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
+
     segments_dir.mkdir(
         parents=True,
         exist_ok=True,
@@ -805,21 +958,28 @@ def render_job(cfg, job_id: str) -> Path:
         or "Ranking funny viral videos"
     )
 
-    items = job.get("items", [])
+    items = job.get(
+        "items",
+        [],
+    )
+
     if not items:
         raise RuntimeError(
             "Ranking job has no items"
         )
 
     # --------------------------------------------------------
-    # Build sequence: intro, clip, transition..., outro.
+    # Build exact rendering sequence.
     # --------------------------------------------------------
-    sequence: list[tuple[Path, str]] = []
+
+    sequence: list[
+        tuple[Path, str]
+    ] = []
 
     if cfg.template.render.intro:
         if cfg.template.assets.intro is None:
             raise RuntimeError(
-                "Intro is enabled but assets.intro is missing"
+                "Intro is enabled but intro asset is missing"
             )
 
         sequence.append(
@@ -839,7 +999,8 @@ def render_job(cfg, job_id: str) -> Path:
 
         if not local_path:
             raise RuntimeError(
-                f"Job item #{index} has no local_path"
+                f"Ranking item #{index} "
+                "has no local_path"
             )
 
         sequence.append(
@@ -852,20 +1013,21 @@ def render_job(cfg, job_id: str) -> Path:
         if cfg.template.render.transition:
             if cfg.template.assets.transition is None:
                 raise RuntimeError(
-                    "Transition is enabled but assets.transition is missing"
+                    "Transition is enabled but transition "
+                    "asset is missing"
                 )
 
             sequence.append(
                 (
                     cfg.template.assets.transition,
-                    f"trans_{index:03d}",
+                    f"transition_{index:03d}",
                 )
             )
 
     if cfg.template.render.outro:
         if cfg.template.assets.outro is None:
             raise RuntimeError(
-                "Outro is enabled but assets.outro is missing"
+                "Outro is enabled but outro asset is missing"
             )
 
         sequence.append(
@@ -875,14 +1037,10 @@ def render_job(cfg, job_id: str) -> Path:
             )
         )
 
-    if not sequence:
-        raise RuntimeError(
-            "Nothing to render"
-        )
+    # --------------------------------------------------------
+    # Normalize every segment independently.
+    # --------------------------------------------------------
 
-    # --------------------------------------------------------
-    # Normalize clips/assets to the configured canvas.
-    # --------------------------------------------------------
     segment_paths: list[Path] = []
 
     for index, (
@@ -892,22 +1050,26 @@ def render_job(cfg, job_id: str) -> Path:
         sequence,
         start=1,
     ):
-        dest = (
+        destination = (
             segments_dir
             / f"{index:03d}_{label}.mp4"
         )
 
         _normalize_segment(
             source,
-            dest,
+            destination,
             cfg=cfg,
         )
 
-        segment_paths.append(dest)
+        segment_paths.append(
+            destination
+        )
 
     # --------------------------------------------------------
-    # Calculate exact clip/transition/outro timestamps.
+    # Determine timings from normalized segment durations.
+    # These timings match the continuous concat-filter timeline.
     # --------------------------------------------------------
+
     durations = [
         _get_duration(path)
         for path in segment_paths
@@ -926,34 +1088,56 @@ def render_job(cfg, job_id: str) -> Path:
         durations,
     ):
         if label.startswith("clip_"):
-            clip_starts.append(cursor)
+            clip_starts.append(
+                cursor
+            )
 
         if label == "outro":
             outro_start = cursor
 
         cursor += duration
 
-    total_duration = cursor
-
     if not clip_starts:
         raise RuntimeError(
-            "Ranking job has no clips"
+            "Ranking job contains no clips"
         )
 
-    first_clip_start = clip_starts[0]
+    total_duration = cursor
 
-    # Overlays disappear only for intro/outro. Transitions are
-    # intentionally inside this interval.
+    # Title/numbers/captions start at clip 1 and remain visible through
+    # all later clips and transitions until the outro starts.
+    overlay_start = clip_starts[0]
     overlay_end = (
         outro_start
         if outro_start is not None
         else total_duration
     )
 
-    assigned_numbers = _make_assigned_numbers(
-        len(clip_starts),
-        job_id,
+    # --------------------------------------------------------
+    # Ranking order.
+    # --------------------------------------------------------
+
+    assigned_numbers = (
+        _make_assigned_numbers(
+            len(clip_starts),
+            seed_text=job_id,
+        )
     )
+
+    number_labels = [
+        MEDAL_LABELS.get(
+            number,
+            f"{number}.",
+        )
+        for number in range(
+            1,
+            len(assigned_numbers) + 1,
+        )
+    ]
+
+    # --------------------------------------------------------
+    # Title.
+    # --------------------------------------------------------
 
     title1, title2 = (
         _wrap_title_to_two_lines(
@@ -961,100 +1145,46 @@ def render_job(cfg, job_id: str) -> Path:
         )
     )
 
-    caption_items: list[tuple[int, str, int]] = []
+    # --------------------------------------------------------
+    # Captions and cached Twemoji assets.
+    # --------------------------------------------------------
 
-    for index, item in enumerate(
-        items,
-        start=1,
-    ):
+    normalized_captions: list[
+        str | None
+    ] = []
+
+    for item in items:
         caption = str(
             item.get("caption")
             or ""
         ).strip()
 
-        if caption:
-            caption_items.append(
-                (
-                    index,
-                    _short_caption(caption),
-                    assigned_numbers[index - 1],
-                )
-            )
+        normalized_captions.append(
+            _short_caption(caption)
+            if caption
+            else None
+        )
 
-    # --------------------------------------------------------
-    # Download only emojis actually used in title/ranks/captions.
-    # --------------------------------------------------------
-    number_labels = [
-        MEDAL_LABELS.get(
-            position,
-            f"{position}.",
-        )
-        for position in range(
-            1,
-            len(items) + 1,
-        )
+    emoji_texts = [
+        title1,
+        title2,
+        *number_labels,
+        *[
+            caption
+            for caption in normalized_captions
+            if caption
+        ],
     ]
 
     emoji_assets = ensure_text_emoji_assets(
         BASE_DIR,
-        [
-            title1,
-            title2,
-            *number_labels,
-            *[
-                caption
-                for _, caption, _
-                in caption_items
-            ],
-        ],
+        emoji_texts,
     )
 
     # --------------------------------------------------------
-    # Merge normalized segments.
+    # One static title + numbers overlay.
     # --------------------------------------------------------
-    merged_base = (
-        rendered_dir
-        / "merged_base.mp4"
-    )
-    concat_list = (
-        rendered_dir
-        / "concat.txt"
-    )
 
-    with concat_list.open(
-        "w",
-        encoding="utf-8",
-    ) as f:
-        for seg in segment_paths:
-            escaped = (
-                str(seg)
-                .replace("\\", "\\\\")
-                .replace("'", "'\\''")
-            )
-            f.write(
-                f"file '{escaped}'\n"
-            )
-
-    _run(
-        [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(concat_list),
-            "-c",
-            "copy",
-            str(merged_base),
-        ]
-    )
-
-    # --------------------------------------------------------
-    # One static overlay: title + every number.
-    # It is only active from first clip to start of outro.
-    # --------------------------------------------------------
     static_overlay = (
         rendered_dir
         / "ranking_static.png"
@@ -1069,25 +1199,39 @@ def render_job(cfg, job_id: str) -> Path:
         output_path=static_overlay,
     )
 
-    overlays: list[
-        tuple[Path, float, float, int, int]
+    overlay_entries: list[
+        tuple[Path, float, float]
     ] = [
         (
             static_overlay,
-            first_clip_start,
+            overlay_start,
             overlay_end,
-            0,
-            0,
         )
     ]
 
     # --------------------------------------------------------
-    # Each caption is a small cropped PNG, not a full 1080x1920
-    # overlay. This dramatically reduces the final filter cost.
+    # One caption image per ranking item.
+    # Caption N starts with clip N and remains through all later
+    # clips/transitions until the outro begins.
     # --------------------------------------------------------
+
     caption_paths: list[Path] = []
 
-    for index, caption, number in caption_items:
+    for index, (
+        caption,
+        number,
+        clip_start,
+    ) in enumerate(
+        zip(
+            normalized_captions,
+            assigned_numbers,
+            clip_starts,
+        ),
+        start=1,
+    ):
+        if not caption:
+            continue
+
         caption_path = (
             rendered_dir
             / f"caption_{index:03d}.png"
@@ -1100,93 +1244,67 @@ def render_job(cfg, job_id: str) -> Path:
             output_path=caption_path,
         )
 
-        y = (
-            NUMBER_START_Y
-            + (number - 1)
-            * NUMBER_GAP
-            + CAPTION_OFFSET_Y
-        )
-
-        start = clip_starts[
-            index - 1
-        ]
-
-        overlays.append(
-            (
-                caption_path,
-                start,
-                overlay_end,
-                CAPTION_LEFT_X,
-                y,
-            )
-        )
         caption_paths.append(
             caption_path
         )
 
-    # --------------------------------------------------------
-    # Final overlay pass.
-    # --------------------------------------------------------
-    extra_inputs, overlay_filter = (
-        _build_overlay_filter(
-            overlays=overlays,
-            total_duration=total_duration,
+        overlay_entries.append(
+            (
+                caption_path,
+                clip_start,
+                overlay_end,
+            )
         )
+
+    # --------------------------------------------------------
+    # Merge normalized clips with the concat FILTER.
+    # --------------------------------------------------------
+
+    merged_base = (
+        rendered_dir
+        / "merged_base.mp4"
     )
+
+    _merge_normalized_segments(
+        segment_paths,
+        merged_base,
+    )
+
+    # --------------------------------------------------------
+    # Apply overlays using the continuous timeline.
+    # --------------------------------------------------------
 
     final_path = (
         rendered_dir
         / "final.mp4"
     )
 
-    _run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(merged_base),
-            *extra_inputs,
-            "-filter_complex",
-            overlay_filter,
-            "-map",
-            "[v]",
-            "-map",
-            "0:a?",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "20",
-            "-c:a",
-            "copy",
-            "-t",
-            f"{total_duration:.3f}",
-            "-movflags",
-            "+faststart",
-            str(final_path),
-        ]
+    final_command = _build_overlay_command(
+        merged_base=merged_base,
+        overlay_entries=overlay_entries,
+        total_duration=total_duration,
+        output_path=final_path,
     )
 
-    # Cleanup large intermediate files and temporary overlays.
-    concat_list.unlink(
-        missing_ok=True
-    )
-    merged_base.unlink(
-        missing_ok=True
-    )
-    static_overlay.unlink(
-        missing_ok=True
-    )
-
-    for path in caption_paths:
-        path.unlink(
+    try:
+        _run(final_command)
+    finally:
+        static_overlay.unlink(
             missing_ok=True
         )
+
+        for caption_path in caption_paths:
+            caption_path.unlink(
+                missing_ok=True
+            )
 
     shutil.rmtree(
         segments_dir,
         ignore_errors=True,
+    )
+
+    merged_base.unlink(
+        missing_ok=True
     )
 
     job = (
@@ -1199,7 +1317,9 @@ def render_job(cfg, job_id: str) -> Path:
 
     job["status"] = "rendered"
     job["render_started_at"] = (
-        job.get("render_started_at")
+        job.get(
+            "render_started_at"
+        )
         or now_iso()
     )
     job["rendered_at"] = now_iso()
