@@ -15,7 +15,7 @@ from .twemoji import ensure_text_emoji_assets, iter_emoji, resize_emoji
 
 RANKING_ASSET_DIR = BASE_DIR / "assets" / "ranking"
 
-TITLE_FONT_SIZE = 90
+TITLE_FONT_SIZE = 110
 TITLE_MIN_FONT_SIZE = 34
 TITLE_TOP_Y = 40
 TITLE_LINE_SPACING = 5
@@ -26,15 +26,15 @@ NUMBER_START_Y = 300
 NUMBER_GAP = 120
 
 CAPTION_FONT_SIZE = 74
-CAPTION_LEFT_X = 150
-CAPTION_OFFSET_Y = 0
+CAPTION_LEFT_X = 160
+CAPTION_OFFSET_Y = -10
 
 NUMBER_BORDER = 5
 TITLE_BORDER = 5
 
 # "center" preserves the centered placement.
 # "bottom" anchors the foreground clip near the bottom edge.
-CLIP_POSITION = "center"
+CLIP_POSITION = "bottom"
 CLIP_Y_OFFSET = 0
 CLIP_BOTTOM_MARGIN = 120
 
@@ -809,6 +809,8 @@ def _build_overlay_command(
         image_path,
         start,
         end,
+        x,
+        y,
     ) in enumerate(
         overlay_entries,
         start=1,
@@ -829,7 +831,7 @@ def _build_overlay_command(
         filters.append(
             f"[{current}]"
             f"[{index}:v]"
-            f"overlay=0:0:"
+            f"overlay={x}:{y}:"
             f"eof_action=repeat:"
             f"repeatlast=1:"
             f"enable='between(t,{start:.3f},{end:.3f})'"
@@ -1127,7 +1129,7 @@ def render_job(
     number_labels = [
         MEDAL_LABELS.get(
             number,
-            f"{number}.",
+            f"{number}   .",
         )
         for number in range(
             1,
@@ -1200,12 +1202,14 @@ def render_job(
     )
 
     overlay_entries: list[
-        tuple[Path, float, float]
+        tuple[Path, float, float, int, int]
     ] = [
         (
             static_overlay,
             overlay_start,
             overlay_end,
+            0,
+            0,
         )
     ]
 
@@ -1248,11 +1252,19 @@ def render_job(
             caption_path
         )
 
+        caption_y = (
+            NUMBER_START_Y
+            + (number - 1) * NUMBER_GAP
+            + CAPTION_OFFSET_Y
+        )
+
         overlay_entries.append(
             (
                 caption_path,
                 clip_start,
                 overlay_end,
+                CAPTION_LEFT_X,
+                caption_y,
             )
         )
 

@@ -26,7 +26,7 @@ YOUTUBE_CLIENT_SECRET = BASE_DIR / "config" / "youtube_client_secret.json"
 YOUTUBE_TOKEN_FILE = BASE_DIR / "data" / "youtube" / "token.json"
 YOUTUBE_WORKDIR = BASE_DIR / "data" / "publish"
 YOUTUBE_CATEGORY_ID = "23"
-YOUTUBE_PRIVACY_STATUS = "private"
+YOUTUBE_PRIVACY_STATUS = "public" #public or private
 
 
 def _load_credentials(interactive: bool = False) -> Credentials:
@@ -150,7 +150,7 @@ async def _do_publish(job: dict, context: ContextTypes.DEFAULT_TYPE) -> None:
         clear_runtime_job(job["job_id"])
         await context.bot.send_message(
             chat_id=int(job["command_chat_id"]),
-            text=f"Published to YouTube successfully.\nVideo ID: <code>{escape(video_id)}</code>",
+            text=f"Published to YouTube successfully.\nVideo ID: <code>youtu.be/{escape(video_id)}</code>",
             parse_mode="HTML",
             disable_web_page_preview=True,
         )

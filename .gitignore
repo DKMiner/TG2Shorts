@@ -55,10 +55,15 @@ temp/
 *.avi
 *.webm
 
+# Emojis
+assets/emoji/*.png
+
 # except template assets
 !assets/**/*.mp4
 !assets/**/*.mov
 !assets/**/*.mkv
+!assets/**/*.ttf
+!assets/**/*.otf
 
 # -------------------------
 # ffmpeg temporary files
